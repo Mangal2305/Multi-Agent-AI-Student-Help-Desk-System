@@ -1,0 +1,100 @@
+name: Docker CI/CD
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: sahayak-helpdesk
+
+jobs:
+  validate:
+    name: Validate source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node (for a syntax check only — no build step, no deps)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Confirm the three site files exist
+        run: |
+          test -f index.html
+          test -f styles.css
+          test -f app.js
+
+      - name: Check app.js for syntax errors
+        run: node --check app.js
+
+  build-and-push:
+    name: Build, smoke-test, and push image
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+
+      - name: Build image (load locally for the smoke test)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the image
+        run: |
+          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          docker run -d --name smoke -p 8080:80 "$FIRST_TAG"
+          for i in {1..10}; do
+            if curl -sf http://localhost:8080/healthz > /dev/null; then
+              echo "Healthy."
+              break
+            fi
+            echo "Waiting for container to become healthy... ($i/10)"
+            sleep 2
+          done
+          curl -sf http://localhost:8080/healthz
+          docker logs smoke
+          docker rm -f smoke
+
+      - name: Push image to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
