@@ -1,0 +1,8 @@
+services:
+  sahayak-helpdesk:
+    build: .
+    image: sahayak-helpdesk:latest
+    container_name: sahayak-helpdesk
+    ports:
+      - "8080:80"
+    restart: unless-stopped

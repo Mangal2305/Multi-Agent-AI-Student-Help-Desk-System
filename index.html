@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sahayak — AI Student Help Desk</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ================= LOGIN ================= -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-left">
+      <div class="brand-mark"><span class="dot"></span> SAHAYAK · AI HELP DESK</div>
+      <h1>Six agents.<br>One conversation.<br>Zero wait.</h1>
+      <p>A cloud-based multi-agent help desk that answers what it knows, and instantly routes what it doesn't to the right faculty member — logged, tracked, and improving with every reply.</p>
+      <div class="pipeline-preview">
+        <span class="pipeline-chip">🧭 Intent Recognition</span>
+        <span class="pipeline-chip">🏷️ Entity Extraction</span>
+        <span class="pipeline-chip">📚 Knowledge Retrieval (RAG)</span>
+        <span class="pipeline-chip">⚖️ Decision</span>
+        <span class="pipeline-chip">🎫 Ticket Routing</span>
+        <span class="pipeline-chip">📧 Notification</span>
+      </div>
+    </div>
+    <div class="login-right">
+      <div class="auth-tabs" id="auth-tabs">
+        <button class="auth-tab active" data-mode="signin">Sign In</button>
+        <button class="auth-tab" data-mode="signup">Create Account</button>
+      </div>
+      <div id="auth-form-area"><div class="empty" style="padding:30px 0;">Loading…</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= APP ================= -->
+<div id="app-screen">
+  <div class="sidebar">
+    <div class="brand-mark"><span class="dot"></span> SAHAYAK</div>
+    <div id="nav-items"></div>
+    <div class="sidebar-footer">
+      <div class="user-chip"><span class="avatar" id="avatar-letter">A</span><span id="user-label">—</span></div>
+      <button class="logout-link" id="logout-btn">← Switch role</button>
+    </div>
+  </div>
+  <div class="main" id="main-content"></div>
+</div>
+
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
