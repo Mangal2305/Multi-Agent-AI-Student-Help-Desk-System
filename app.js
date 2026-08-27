@@ -92,7 +92,8 @@ function seedData(){
     tickets: [],
     chatLog: [],
     pendingApprovals: [],
-    users: []
+    users: [],
+    documents: []
   };
 }
 
@@ -105,6 +106,7 @@ async function loadData(){
   }
   if(!DATA.kb || DATA.kb.length===0) DATA = seedData();
   if(!DATA.users) DATA.users = [];
+  if(!DATA.documents) DATA.documents = [];
   await saveData();
 }
 async function saveData(){
@@ -321,9 +323,9 @@ document.getElementById('logout-btn').addEventListener('click', ()=>{
    SHELL / NAV
 ============================================================ */
 const NAV = {
-  student: [ ["chat","💬","Ask AI"], ["tickets","🎫","My Tickets"], ["home","🏠","Dashboard"] ],
-  faculty: [ ["inbox","📥","Inbox"], ["resolved","✅","Resolved"] ],
-  admin:   [ ["overview","📊","Overview"], ["alltickets","🗂️","All Tickets"], ["approvals","🧠","KB Approvals"], ["kb","📚","Knowledge Base"] ]
+  student: [ ["chat","💬","Ask AI"], ["tickets","🎫","My Tickets"], ["documents","📎","Documents"], ["home","🏠","Dashboard"] ],
+  faculty: [ ["inbox","📥","Inbox"], ["resolved","✅","Resolved"], ["s3","📦","Document Storage"] ],
+  admin:   [ ["overview","📊","Overview"], ["alltickets","🗂️","All Tickets"], ["approvals","🧠","KB Approvals"], ["kb","📚","Knowledge Base"], ["s3","📦","Document Storage"] ]
 };
 
 function renderShell(){
@@ -351,17 +353,20 @@ function renderMain(){
   if(SESSION.role==='student'){
     if(SESSION.tab==='chat') return renderChatView();
     if(SESSION.tab==='tickets') return renderStudentTickets();
+    if(SESSION.tab==='documents') return renderStudentDocuments();
     if(SESSION.tab==='home') return renderStudentHome();
   }
   if(SESSION.role==='faculty'){
     if(SESSION.tab==='inbox') return renderFacultyInbox();
     if(SESSION.tab==='resolved') return renderFacultyResolved();
+    if(SESSION.tab==='s3') return renderS3Bucket();
   }
   if(SESSION.role==='admin'){
     if(SESSION.tab==='overview') return renderAdminOverview();
     if(SESSION.tab==='alltickets') return renderAdminTickets();
     if(SESSION.tab==='approvals') return renderApprovals();
     if(SESSION.tab==='kb') return renderKB();
+    if(SESSION.tab==='s3') return renderS3Bucket();
   }
 }
 
@@ -558,6 +563,136 @@ function renderStudentTickets(){
         </div>`).join('')}
     </div>`;
 }
+
+/* ============================================================
+   DOCUMENTS (Amazon S3 simulation — small files, base64-encoded,
+   stored alongside the rest of the app's data)
+============================================================ */
+const DOC_MAX_BYTES = 300 * 1024; // 300KB per file — demo storage limit
+const DOC_CATEGORIES = ['Certificate','Marksheet / Transcript','ID Proof','NOC Supporting Document','Scholarship Document','Other'];
+
+function docIcon(type){
+  if(type.includes('pdf')) return '📕';
+  if(type.includes('image')) return '🖼️';
+  if(type.includes('word') || type.includes('doc')) return '📄';
+  return '📎';
+}
+function fmtKB(bytes){ return (bytes/1024).toFixed(1)+' KB'; }
+
+function renderStudentDocuments(){
+  const el = document.getElementById('main-content');
+  const mine = DATA.documents.filter(d=>d.studentName===SESSION.name).slice().reverse();
+  el.innerHTML = `
+    <div class="page-head"><div><h2>Documents</h2><div class="sub">Upload certificates, marksheets, or ID proof — stored the same way Amazon S3 would hold them in production</div></div></div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <h3 style="margin-top:0;font-size:14.5px;">Upload a document</h3>
+      <div class="sub" style="margin-bottom:12px;">Max 300KB per file for this demo's storage limits — plenty for a scanned certificate or ID photo.</div>
+      <label class="field-lbl">Category</label>
+      <select id="doc-category" style="width:100%;background:var(--surface2);border:1px solid var(--line);color:var(--text);padding:11px 12px;border-radius:10px;font-size:14px;margin-bottom:14px;font-family:inherit;">
+        ${DOC_CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('')}
+      </select>
+      <label class="field-lbl">File</label>
+      <input type="file" id="doc-file-input" style="width:100%;color:var(--muted);font-size:13px;margin-bottom:14px;">
+      <button class="small-btn" id="doc-upload-btn">Upload</button>
+      <div id="doc-upload-status" style="margin-top:10px;font-size:12.5px;"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;font-size:14.5px;">My Documents (${mine.length})</h3>
+      ${mine.length===0 ? '<div class="empty">Nothing uploaded yet.</div>' : mine.map(d=>`
+        <div class="ticket-row" style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+          <div style="display:flex;gap:12px;align-items:center;min-width:0;">
+            <span style="font-size:20px;">${docIcon(d.fileType)}</span>
+            <div style="min-width:0;">
+              <div style="font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.fileName}</div>
+              <div class="meta" style="margin-top:3px;"><span>${d.category}</span><span>${fmtKB(d.fileSize)}</span><span>${fmtTime(d.uploadedAt)}</span></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0;">
+            <a class="small-btn ghost" style="text-decoration:none;display:inline-block;" href="${d.dataUrl}" download="${d.fileName}">Download</a>
+            <button class="small-btn ghost" data-del-doc="${d.id}">Delete</button>
+          </div>
+        </div>`).join('')}
+    </div>`;
+
+  document.getElementById('doc-upload-btn').addEventListener('click', uploadDocument);
+  el.querySelectorAll('[data-del-doc]').forEach(b=>b.addEventListener('click', async ()=>{
+    DATA.documents = DATA.documents.filter(d=>d.id!==b.dataset.delDoc);
+    await saveData();
+    toast('🗑️ Document deleted');
+    renderStudentDocuments();
+  }));
+}
+
+function uploadDocument(){
+  const fileInput = document.getElementById('doc-file-input');
+  const category = document.getElementById('doc-category').value;
+  const status = document.getElementById('doc-upload-status');
+  const file = fileInput.files[0];
+
+  if(!file){ status.innerHTML = '<span style="color:var(--coral);">Choose a file first.</span>'; return; }
+  if(file.size > DOC_MAX_BYTES){
+    status.innerHTML = `<span style="color:var(--coral);">"${file.name}" is ${fmtKB(file.size)} — over the 300KB demo limit. Try a smaller file or a more compressed scan.</span>`;
+    return;
+  }
+
+  status.textContent = 'Uploading…';
+  const reader = new FileReader();
+  reader.onload = async ()=>{
+    DATA.documents.push({
+      id: 'doc-'+Date.now().toString(36),
+      studentName: SESSION.name,
+      fileName: file.name,
+      fileType: file.type || 'application/octet-stream',
+      fileSize: file.size,
+      category,
+      dataUrl: reader.result,
+      uploadedAt: Date.now()
+    });
+    await saveData();
+    toast('📦 Uploaded to Document Storage — S3-style, key: '+file.name);
+    renderStudentDocuments();
+  };
+  reader.onerror = ()=>{ status.innerHTML = '<span style="color:var(--coral);">Could not read that file — try again.</span>'; };
+  reader.readAsDataURL(file);
+}
+
+function renderS3Bucket(){
+  const el = document.getElementById('main-content');
+  const docs = DATA.documents.slice().reverse();
+  const totalBytes = DATA.documents.reduce((a,d)=>a+d.fileSize,0);
+  const byCategory = {};
+  DATA.documents.forEach(d=> byCategory[d.category] = (byCategory[d.category]||0)+1 );
+
+  el.innerHTML = `
+    <div class="page-head"><div><h2>Document Storage</h2><div class="sub">bucket: <span class="mono">sahayak-student-documents</span> · ${docs.length} objects · ${fmtKB(totalBytes)} used</div></div></div>
+
+    <div class="grid cols-4" style="margin-bottom:20px;">
+      <div class="card stat-card"><div class="tag">Objects</div><div class="num">${docs.length}</div><div class="lbl">files stored</div></div>
+      <div class="card stat-card"><div class="tag">Storage used</div><div class="num">${fmtKB(totalBytes)}</div><div class="lbl">of unlimited (demo)</div></div>
+      <div class="card stat-card"><div class="tag">Uploaders</div><div class="num">${new Set(DATA.documents.map(d=>d.studentName)).size}</div><div class="lbl">distinct students</div></div>
+      <div class="card stat-card"><div class="tag">Categories</div><div class="num">${Object.keys(byCategory).length}</div><div class="lbl">document types</div></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;font-size:14.5px;">Objects</h3>
+      ${docs.length===0 ? '<div class="empty">No documents uploaded yet.</div>' : `
+      <table>
+        <tr><th>Key</th><th>Uploaded by</th><th>Category</th><th>Size</th><th>Uploaded</th><th></th></tr>
+        ${docs.map(d=>`
+          <tr>
+            <td>${docIcon(d.fileType)} ${d.fileName}</td>
+            <td>${d.studentName}</td>
+            <td>${d.category}</td>
+            <td class="mono">${fmtKB(d.fileSize)}</td>
+            <td>${fmtTime(d.uploadedAt)}</td>
+            <td><a class="small-btn ghost" style="text-decoration:none;display:inline-block;" href="${d.dataUrl}" download="${d.fileName}">Download</a></td>
+          </tr>`).join('')}
+      </table>`}
+    </div>`;
+}
+
 
 /* ============================================================
    FACULTY: INBOX / RESOLVED
@@ -1162,7 +1297,7 @@ const AWS_EXTRAS = [
 
 const AWS_FREE_ALT = [
   ['Amazon EC2', 'Backend Hosting', 'Runs entirely client-side in the browser', 'No server process needed for this prototype — the agent pipeline is plain JavaScript.'],
-  ['Amazon S3', 'Document Storage', 'Not required yet (no file uploads in scope)', 'Would be the first service added if certificate/document upload is implemented.'],
+  ['Amazon S3', 'Document Storage', 'Base64-encoded files in persistent storage (Documents tab)', "Students upload certificates/marksheets/ID proof; Admin browses everything in the Document Storage tab, styled like an S3 bucket listing. Capped at 300KB/file for this demo's storage limits — real S3 has no such cap."],
   ['Amazon RDS', 'Database', 'Persistent key-value storage (window.storage)', 'Holds tickets, chat history, users, and the Knowledge Base — same shape of data RDS tables would hold.'],
   ['Amazon Cognito', 'Authentication', 'Custom email + password Sign In / Create Account', 'Passwords are obfuscated, not securely hashed — fine for a demo, not for production.'],
   ['Amazon IAM', 'Access Management', 'Role-based UI gating in JavaScript (student / faculty / admin)', 'Each role only sees and can act on the screens and data it should.'],
