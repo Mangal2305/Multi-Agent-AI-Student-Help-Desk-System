@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: ["main"]
   workflow_dispatch:
+    inputs:
+      run_backup:
+        description: "Run DB backup only (skip build/push)"
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 2 * * *'   # daily at 02:00 UTC — DB backup only
 
 env:
   IMAGE_NAME: sahayak-helpdesk
@@ -14,6 +22,8 @@ jobs:
   validate:
     name: Validate source
     runs-on: ubuntu-latest
+    # Skip on scheduled runs (those are for the DB backup job only)
+    if: github.event_name != 'schedule' && github.event.inputs.run_backup != 'true'
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
@@ -36,6 +46,7 @@ jobs:
     name: Build, smoke-test, and push image
     needs: validate
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule' && github.event.inputs.run_backup != 'true'
     permissions:
       contents: read
       packages: write
@@ -98,3 +109,65 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  backup-db:
+    name: Backup DB to S3
+    runs-on: ubuntu-latest
+    # Runs on the daily schedule, or when manually dispatched with run_backup=true.
+    # NOTE: sahayak-db has its internet access gateway disabled, so this job
+    # can only reach it if this runner is inside the same VPC — see comment below.
+    if: github.event_name == 'schedule' || github.event.inputs.run_backup == 'true'
+    steps:
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Download RDS SSL cert
+        run: curl -o global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+
+      - name: Dump database
+        env:
+          PGHOST: ${{ secrets.RDS_HOST }}
+          PGPORT: 5432
+          PGDATABASE: postgres
+          PGUSER: sahayak_admin
+          PGPASSWORD: ${{ secrets.RDS_PASSWORD }}
+        run: |
+          TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+          pg_dump "host=$PGHOST port=$PGPORT dbname=$PGDATABASE user=$PGUSER sslmode=verify-full sslrootcert=./global-bundle.pem" \
+            | gzip > "sahayak-db_${TIMESTAMP}.sql.gz"
+          echo "DUMP_FILE=sahayak-db_${TIMESTAMP}.sql.gz" >> $GITHUB_ENV
+
+      - name: Upload backup to S3
+        run: |
+          aws s3 cp "$DUMP_FILE" "s3://sahayak-documents/sahayak/backups/$DUMP_FILE"
+
+      - name: Clean up local dump
+        if: always()
+        run: rm -f *.sql.gz global-bundle.pem
+
+# =========================================================
+# Required GitHub repo secrets (Settings -> Secrets and variables -> Actions):
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, RDS_HOST, RDS_PASSWORD
+#
+# IMPORTANT — network reachability:
+# sahayak-db shows "Internet access gateway: Disabled" in the RDS console,
+# meaning it's only reachable from within its VPC. GitHub's hosted
+# ubuntu-latest runners run outside your VPC and will NOT be able to reach
+# the DB with the job as written above. To make backup-db actually work,
+# do ONE of:
+#   1. Register a self-hosted GitHub Actions runner on an EC2 instance
+#      inside the same VPC as sahayak-db, and change
+#      `runs-on: ubuntu-latest` to `runs-on: self-hosted` for this job only.
+#   2. Run the equivalent backup_to_s3.sh script via cron on an in-VPC EC2
+#      instance instead of through GitHub Actions.
+#   3. Use a scheduled Lambda inside the VPC instead of GitHub Actions.
+# Option 1 lets you keep everything in this one workflow file; options 2/3
+# move the backup job out of GitHub Actions entirely.
+# =========================================================
