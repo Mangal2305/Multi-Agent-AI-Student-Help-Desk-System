@@ -124,24 +124,81 @@ app.post('/api/signin', async (req, res) => {
 // AI Conversations: log a chat exchange
 // ---------------------------------------------------------
 app.post('/api/conversations', async (req, res) => {
-  const { user_id, user_query, ai_response, channel, sentiment } = req.body;
-  if (!user_query || !ai_response) {
-    return res.status(400).json({ error: 'user_query and ai_response are required' });
+  const {
+    user_id,
+    user_query,
+    ai_response,
+    channel,
+    sentiment
+  } = req.body;
+
+  // Validate required fields
+  if (!user_id || !user_query || !ai_response) {
+    return res.status(400).json({
+      error: 'user_id, user_query and ai_response are required'
+    });
   }
+
   try {
-    const result = await pool.query(
-      `INSERT INTO ai_conversations (user_id, user_query, ai_response, channel, sentiment)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING conversation_id, created_at`,
-      [user_id || null, user_query, ai_response, channel || 'web', sentiment || null]
+    // Check that the user actually exists
+    const userCheck = await pool.query(
+      `SELECT user_id FROM public.users WHERE user_id = $1`,
+      [user_id]
     );
-    res.status(201).json({ conversation: result.rows[0] });
+
+    if (userCheck.rows.length === 0) {
+      return res.status(400).json({
+        error: `User ID ${user_id} does not exist`
+      });
+    }
+
+    // Save conversation
+    const result = await pool.query(
+      `
+      INSERT INTO public.ai_conversations
+      (
+        user_id,
+        user_query,
+        ai_response,
+        channel,
+        sentiment
+      )
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING
+        conversation_id,
+        user_id,
+        user_query,
+        ai_response,
+        channel,
+        sentiment,
+        created_at
+      `,
+      [
+        user_id,
+        user_query,
+        ai_response,
+        channel || 'web',
+        sentiment || null
+      ]
+    );
+
+    console.log('✅ Conversation saved:', result.rows[0]);
+
+    res.status(201).json({
+      success: true,
+      conversation: result.rows[0]
+    });
+
   } catch (err) {
-    console.error('Conversation log error:', err);
-    res.status(500).json({ error: 'Could not save conversation' });
+    console.error('❌ Conversation log error:', err);
+
+    res.status(500).json({
+      success: false,
+      error: 'Could not save conversation',
+      details: err.message
+    });
   }
 });
-
 // ---------------------------------------------------------
 // Support Tickets: create + list + resolve
 // ---------------------------------------------------------

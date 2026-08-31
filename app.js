@@ -498,6 +498,47 @@ function pipelineHTML(activeStage){
     return `<div class="${cls}" id="node-${s.k}"><div class="circle">${s.ic}</div><div class="lbl">${s.l}</div><div class="status" id="status-${s.k}"></div></div>${line}`;
   }).join('');
 }
+async function saveConversationToDatabase(userQuery, aiResponse, sentiment = null) {
+  try {
+    console.log('Saving conversation...');
+    console.log('User ID:', SESSION.userId);
+    console.log('Question:', userQuery);
+    console.log('AI Response:', aiResponse);
+
+    if (!SESSION.userId) {
+      console.error('❌ No user ID found in SESSION');
+      return false;
+    }
+
+    const response = await fetch('/api/conversations', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        user_id: SESSION.userId,
+        user_query: userQuery,
+        ai_response: aiResponse,
+        channel: 'web',
+        sentiment: sentiment
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error('❌ Conversation save failed:', data);
+      return false;
+    }
+
+    console.log('✅ Conversation saved:', data);
+    return true;
+
+  } catch (error) {
+    console.error('❌ Error saving conversation:', error);
+    return false;
+  }
+}
 
 async function submitQuery(){
   const input = document.getElementById('chat-input');
@@ -537,12 +578,41 @@ async function submitQuery(){
 
   if(confident){
     strip.innerHTML = pipelineHTML('done_direct');
-    // mark all done
-    document.querySelectorAll('.pnode').forEach((n,i)=>{ if(i<4) n.classList.add('done'); });
-    DATA.chatLog.push({type:'answer', studentName:SESSION.name, message:query, response:entry.answer, confidence, timestamp:Date.now()});
-    await saveData();
-    renderChatView();
-    toast('✅ Answered directly by Knowledge Retrieval Agent · '+(confidence*100).toFixed(0)+'% confidence');
+
+  // mark all done
+  document.querySelectorAll('.pnode').forEach((n,i)=>{
+    if(i<4) n.classList.add('done');
+  });
+
+  // Save conversation to frontend data
+  DATA.chatLog.push({
+  type: 'answer',
+  studentName: SESSION.name,
+  message: query,
+  response: entry.answer,
+  confidence,
+  timestamp: Date.now()
+});
+
+console.log('SESSION:', SESSION);
+console.log('Logged-in user ID:', SESSION.userId);
+
+// Save to PostgreSQL
+await saveConversationToDatabase(
+  query,
+  entry.answer
+);
+
+await saveData();
+
+  renderChatView();
+
+  toast(
+    '✅ Answered directly by Knowledge Retrieval Agent · ' +
+    (confidence*100).toFixed(0) +
+    '% confidence'
+  );
+
   } else {
     const existing = findExistingTicket(SESSION.name, query, entry);
 
@@ -573,8 +643,22 @@ async function submitQuery(){
     setStage('notify','emailing faculty…');
     await sleep(500);
     document.getElementById('status-notify').textContent = 'sent';
-    DATA.chatLog.push({type:'ticket', studentName:SESSION.name, message:query, ticketId, dept, timestamp:Date.now()});
-    await saveData();
+   DATA.chatLog.push({
+  type: 'ticket',
+  studentName: SESSION.name,
+  message: query,
+  ticketId,
+  dept,
+  timestamp: Date.now()
+});
+
+// ⭐ Save the user's question + ticket response
+await saveConversationToDatabase(
+  query,
+  `Support ticket ${ticketId} has been created and assigned to ${DEPTS[dept]}.`
+);
+
+await saveData();
     renderChatView();
     toast('📧 Email Notification Agent → '+DEPTS[dept]+' about '+ticketId);
   }
