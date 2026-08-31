@@ -512,19 +512,19 @@ async function saveConversationToDatabase(userQuery, aiResponse, sentiment = nul
       return false;
     }
 
-    const response = await fetch('/api/conversations', {
+    const response = await fetch(`${API_BASE}/api/conversations`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        user_id: SESSION.userId,
-        user_query: userQuery,
-        ai_response: aiResponse,
-        channel: 'web',
-        sentiment: sentiment
-      })
-    });
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+    user_id: SESSION.userId,
+    user_query: userQuery,
+    ai_response: aiResponse,
+    channel: 'web',
+    sentiment: sentiment
+    })
+  });
 
     const data = await response.json();
 
