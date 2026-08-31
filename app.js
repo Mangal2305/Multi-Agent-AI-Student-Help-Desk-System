@@ -1,6 +1,8 @@
 /* ============================================================
    DATA MODEL
 ============================================================ */
+const API_BASE = 'http://sahayak.jo3.org:3000'; // <-- set this to your backend's address, or '' if using the nginx /api proxy
+
 const DEPTS = {
   "Admissions":"Prof. Rina Shah",
   "Examination":"Prof. Meera Nair",
@@ -191,7 +193,7 @@ function toast(msg){
 /* ============================================================
    SESSION STATE
 ============================================================ */
-let SESSION = { role:null, name:'', tab:null };
+let SESSION = { role:null, name:'', tab:null, userId:null };
 let AUTH = { mode:'signin', role:null, error:'' };
 let DATA_READY = false;
 
@@ -270,23 +272,38 @@ document.querySelectorAll('.auth-tab').forEach(tab=>{
   tab.addEventListener('click', ()=>switchMode(tab.dataset.mode));
 });
 
+/* ---------- REAL BACKEND AUTH (replaces window.storage-based auth) ---------- */
 async function handleSignin(){
-  if(!DATA_READY) return;
   const email = document.getElementById('signin-email').value.trim().toLowerCase();
   const password = document.getElementById('signin-password').value;
   if(!email || !password){ AUTH.error='Enter both email and password.'; return renderAuthForm(); }
-  const user = DATA.users.find(u=>u.email===email);
-  if(!user || user.passwordHash !== hashPw(password)){
-    AUTH.error = 'Incorrect email or password.';
-    return renderAuthForm();
+
+  try{
+    const res = await fetch(`${API_BASE}/api/signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+
+    if(!res.ok){
+      AUTH.error = data.error || 'Incorrect email or password.';
+      return renderAuthForm();
+    }
+
+    AUTH.error='';
+    SESSION.role = data.user.role;
+    SESSION.name = data.user.full_name;
+    SESSION.userId = data.user.user_id;
+    enterApp();
+  }catch(e){
+    console.error(e);
+    AUTH.error = 'Could not reach the server. Try again shortly.';
+    renderAuthForm();
   }
-  AUTH.error='';
-  SESSION.role = user.role; SESSION.name = user.name;
-  enterApp();
 }
 
 async function handleSignup(){
-  if(!DATA_READY) return;
   const role = AUTH.role;
   const name = document.getElementById('signup-name').value.trim();
   const email = document.getElementById('signup-email').value.trim().toLowerCase();
@@ -296,19 +313,36 @@ async function handleSignup(){
   if(name.length < 2){ AUTH.error='Enter your full name.'; return renderAuthForm(); }
   if(!isValidEmail(email)){ AUTH.error='Enter a valid email address.'; return renderAuthForm(); }
   if(password.length < 4){ AUTH.error='Password should be at least 4 characters.'; return renderAuthForm(); }
-  if(DATA.users.find(u=>u.email===email)){ AUTH.error='An account with this email already exists — sign in instead.'; return renderAuthForm(); }
 
-  DATA.users.push({ email, name, role, passwordHash: hashPw(password), createdAt: Date.now() });
-  await saveData();
-  AUTH.error='';
-  SESSION.role = role; SESSION.name = name;
-  enterApp();
+  try{
+    const res = await fetch(`${API_BASE}/api/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password, role })
+    });
+    const data = await res.json();
+
+    if(!res.ok){
+      AUTH.error = data.error || 'Could not create account.';
+      return renderAuthForm();
+    }
+
+    AUTH.error='';
+    SESSION.role = data.user.role;
+    SESSION.name = data.user.full_name;
+    SESSION.userId = data.user.user_id;
+    enterApp();
+  }catch(e){
+    console.error(e);
+    AUTH.error = 'Could not reach the server. Try again shortly.';
+    renderAuthForm();
+  }
 }
 
 document.getElementById('logout-btn').addEventListener('click', ()=>{
   document.getElementById('app-screen').classList.remove('show');
   document.getElementById('login-screen').style.display='flex';
-  SESSION = {role:null,name:'',tab:null};
+  SESSION = {role:null,name:'',tab:null,userId:null};
   switchMode('signin');
 });
 
