@@ -101,8 +101,8 @@ function seedData(){
 
 async function loadData(){
   try{
-    const res = await window.storage.get(STORAGE_KEY, true);
-    DATA = res ? JSON.parse(res.value) : seedData();
+    const raw = localStorage.getItem(STORAGE_KEY);
+    DATA = raw ? JSON.parse(raw) : seedData();
   }catch(e){
     DATA = seedData();
   }
@@ -112,7 +112,7 @@ async function loadData(){
   await saveData();
 }
 async function saveData(){
-  try{ await window.storage.set(STORAGE_KEY, JSON.stringify(DATA), true); }
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); }
   catch(e){ console.error("storage save failed", e); }
 }
 
