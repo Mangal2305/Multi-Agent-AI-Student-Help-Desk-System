@@ -500,13 +500,15 @@ function pipelineHTML(activeStage){
 }
 async function saveConversationToDatabase(userQuery, aiResponse, sentiment = null) {
   try {
-    console.log('Saving conversation...');
+    console.log('📤 Saving conversation to PostgreSQL...');
     console.log('User ID:', SESSION.userId);
     console.log('Question:', userQuery);
     console.log('AI Response:', aiResponse);
 
+    // Make sure logged-in user has a database ID
     if (!SESSION.userId) {
-      console.error('❌ No user ID found in SESSION');
+      console.error('❌ SESSION.userId is missing');
+      toast('❌ User ID is missing. Conversation was not saved.');
       return false;
     }
 
@@ -527,140 +529,426 @@ async function saveConversationToDatabase(userQuery, aiResponse, sentiment = nul
     const data = await response.json();
 
     if (!response.ok) {
-      console.error('❌ Conversation save failed:', data);
+      console.error('❌ PostgreSQL save failed:', data);
+
+      toast(
+        '❌ Conversation could not be saved: ' +
+        (data.error || 'Unknown error')
+      );
+
       return false;
     }
 
-    console.log('✅ Conversation saved:', data);
+    console.log('✅ Conversation saved to PostgreSQL:', data);
+
     return true;
 
   } catch (error) {
-    console.error('❌ Error saving conversation:', error);
+    console.error('❌ Error calling /api/conversations:', error);
+
+    toast('❌ Database connection error');
+
     return false;
   }
 }
 
-async function submitQuery(){
+async function submitQuery() {
   const input = document.getElementById('chat-input');
   const query = input.value.trim();
-  if(!query) return;
+
+  if (!query) return;
+
   input.value = '';
   document.getElementById('chat-send').disabled = true;
 
   const strip = document.getElementById('pipeline-strip');
-  const setStage = (stage, statusText)=>{
+
+  const setStage = (stage, statusText) => {
     strip.innerHTML = pipelineHTML(stage);
-    if(statusText) document.getElementById('status-'+stage).textContent = statusText;
+
+    if (statusText) {
+      const statusElement = document.getElementById('status-' + stage);
+
+      if (statusElement) {
+        statusElement.textContent = statusText;
+      }
+    }
   };
 
-  setStage('intent','classifying…');
-  await sleep(450);
-  const {entry, confidence, score} = matchIntent(query);
-  setStage('intent','done');
+  try {
 
-  setStage('entity','scanning…');
-  await sleep(400);
-  const entities = extractEntities(query);
-  document.getElementById('status-entity').textContent = entities.length? entities.length+' found':'none found';
-  await sleep(250);
+    // =========================================================
+    // CHECK LOGGED-IN USER
+    // =========================================================
 
-  setStage('retrieval','searching KB…');
-  await sleep(500);
-  document.getElementById('status-retrieval').textContent = entry ? '"'+entry.name+'" matched' : 'no strong match';
-  await sleep(250);
+    console.log('======================================');
+    console.log('👤 SESSION:', SESSION);
+    console.log('👤 SESSION.userId:', SESSION.userId);
+    console.log('💬 QUERY:', query);
+    console.log('======================================');
 
-  setStage('decision','scoring…');
-  await sleep(450);
-  document.getElementById('status-decision').textContent = (confidence*100).toFixed(0)+'% confidence';
-  await sleep(350);
+    if (!SESSION.userId) {
+      console.error('❌ No user ID found in SESSION');
 
-  const confident = confidence >= 0.55 && entry;
+      toast('❌ User ID not found. Please log in again.');
 
-  if(confident){
-    strip.innerHTML = pipelineHTML('done_direct');
-
-  // mark all done
-  document.querySelectorAll('.pnode').forEach((n,i)=>{
-    if(i<4) n.classList.add('done');
-  });
-
-  // Save conversation to frontend data
-  DATA.chatLog.push({
-  type: 'answer',
-  studentName: SESSION.name,
-  message: query,
-  response: entry.answer,
-  confidence,
-  timestamp: Date.now()
-});
-
-console.log('SESSION:', SESSION);
-console.log('Logged-in user ID:', SESSION.userId);
-
-// Save to PostgreSQL
-await saveConversationToDatabase(
-  query,
-  entry.answer
-);
-
-await saveData();
-
-  renderChatView();
-
-  toast(
-    '✅ Answered directly by Knowledge Retrieval Agent · ' +
-    (confidence*100).toFixed(0) +
-    '% confidence'
-  );
-
-  } else {
-    const existing = findExistingTicket(SESSION.name, query, entry);
-
-    if(existing){
-      setStage('route','duplicate found');
-      await sleep(450);
-      document.getElementById('status-route').textContent = existing.id+' (existing)';
-      await sleep(350);
-      DATA.chatLog.push({type:'duplicate', studentName:SESSION.name, message:query, ticketId:existing.id, dept:existing.dept, timestamp:Date.now()});
-      await saveData();
-      renderChatView();
-      toast('🔁 Duplicate Detection Agent matched '+existing.id+' — no new ticket created');
       return;
     }
 
-    setStage('route','creating ticket…');
-    await sleep(500);
-    const dept = entry ? entry.dept : guessDept(query);
-    const ticketId = genTicketId();
-    DATA.tickets.push({
-      id: ticketId, studentName: SESSION.name, dept, query, status:'open',
-      facultyResponse:null, createdAt: Date.now(), entities,
-      intentKey: entry ? entry.id : null, normQuery: normalizeQuery(query)
-    });
-    document.getElementById('status-route').textContent = ticketId;
+
+    // =========================================================
+    // INTENT CLASSIFICATION
+    // =========================================================
+
+    setStage('intent', 'classifying…');
+
+    await sleep(450);
+
+    const {
+      entry,
+      confidence,
+      score
+    } = matchIntent(query);
+
+    setStage('intent', 'done');
+
+
+    // =========================================================
+    // ENTITY EXTRACTION
+    // =========================================================
+
+    setStage('entity', 'scanning…');
+
     await sleep(400);
 
-    setStage('notify','emailing faculty…');
+    const entities = extractEntities(query);
+
+    const entityStatus = document.getElementById('status-entity');
+
+    if (entityStatus) {
+      entityStatus.textContent =
+        entities.length
+          ? entities.length + ' found'
+          : 'none found';
+    }
+
+    await sleep(250);
+
+
+    // =========================================================
+    // KNOWLEDGE RETRIEVAL
+    // =========================================================
+
+    setStage('retrieval', 'searching KB…');
+
     await sleep(500);
-    document.getElementById('status-notify').textContent = 'sent';
-   DATA.chatLog.push({
-  type: 'ticket',
-  studentName: SESSION.name,
-  message: query,
-  ticketId,
-  dept,
-  timestamp: Date.now()
-});
 
-// ⭐ Save the user's question + ticket response
-await saveConversationToDatabase(
-  query,
-  `Support ticket ${ticketId} has been created and assigned to ${DEPTS[dept]}.`
-);
+    const retrievalStatus =
+      document.getElementById('status-retrieval');
 
-await saveData();
-    renderChatView();
-    toast('📧 Email Notification Agent → '+DEPTS[dept]+' about '+ticketId);
+    if (retrievalStatus) {
+      retrievalStatus.textContent =
+        entry
+          ? '"' + entry.name + '" matched'
+          : 'no strong match';
+    }
+
+    await sleep(250);
+
+
+    // =========================================================
+    // DECISION / CONFIDENCE
+    // =========================================================
+
+    setStage('decision', 'scoring…');
+
+    await sleep(450);
+
+    const decisionStatus =
+      document.getElementById('status-decision');
+
+    if (decisionStatus) {
+      decisionStatus.textContent =
+        (confidence * 100).toFixed(0) + '% confidence';
+    }
+
+    await sleep(350);
+
+
+    // =========================================================
+    // DETERMINE WHETHER AI CAN ANSWER DIRECTLY
+    // =========================================================
+
+    const confident = confidence >= 0.55 && entry;
+
+
+    // =========================================================
+    // PATH 1: CONFIDENT AI ANSWER
+    // =========================================================
+
+    if (confident) {
+
+      console.log('🟢 Confident answer path');
+      console.log('User ID:', SESSION.userId);
+      console.log('Question:', query);
+      console.log('Answer:', entry.answer);
+
+
+      // Pipeline complete
+      strip.innerHTML = pipelineHTML('done_direct');
+
+
+      // Mark all stages done
+      document
+        .querySelectorAll('.pnode')
+        .forEach((n, i) => {
+          if (i < 4) {
+            n.classList.add('done');
+          }
+        });
+
+
+      // =======================================================
+      // SAVE TO FRONTEND DATA
+      // =======================================================
+
+      DATA.chatLog.push({
+        type: 'answer',
+        studentName: SESSION.name,
+        message: query,
+        response: entry.answer,
+        confidence: confidence,
+        timestamp: Date.now()
+      });
+
+
+      // =======================================================
+      // ⭐ SAVE TO POSTGRESQL
+      // =======================================================
+
+      const databaseSaved =
+        await saveConversationToDatabase(
+          query,
+          entry.answer
+        );
+
+
+      console.log(
+        databaseSaved
+          ? '✅ AI conversation saved successfully'
+          : '⚠️ AI conversation was NOT saved'
+      );
+
+
+      // Save existing frontend data
+      await saveData();
+
+      renderChatView();
+
+
+      toast(
+        '✅ Answered directly by Knowledge Retrieval Agent · ' +
+        (confidence * 100).toFixed(0) +
+        '% confidence'
+      );
+
+
+    } else {
+
+      // =======================================================
+      // PATH 2: LOW CONFIDENCE → SUPPORT TICKET
+      // =======================================================
+
+      console.log('🟡 Low confidence → support ticket path');
+
+
+      // =======================================================
+      // CHECK FOR EXISTING / DUPLICATE TICKET
+      // =======================================================
+
+      const existing =
+        findExistingTicket(
+          SESSION.name,
+          query,
+          entry
+        );
+
+
+      if (existing) {
+
+        setStage('route', 'duplicate found');
+
+        await sleep(450);
+
+        const routeStatus =
+          document.getElementById('status-route');
+
+        if (routeStatus) {
+          routeStatus.textContent =
+            existing.id + ' (existing)';
+        }
+
+        await sleep(350);
+
+
+        DATA.chatLog.push({
+          type: 'duplicate',
+          studentName: SESSION.name,
+          message: query,
+          ticketId: existing.id,
+          dept: existing.dept,
+          timestamp: Date.now()
+        });
+
+
+        await saveData();
+
+        renderChatView();
+
+
+        toast(
+          '🔁 Duplicate Detection Agent matched ' +
+          existing.id +
+          ' — no new ticket created'
+        );
+
+        return;
+      }
+
+
+      // =======================================================
+      // CREATE NEW TICKET
+      // =======================================================
+
+      setStage('route', 'creating ticket…');
+
+      await sleep(500);
+
+
+      const dept =
+        entry
+          ? entry.dept
+          : guessDept(query);
+
+
+      const ticketId = genTicketId();
+
+
+      // =======================================================
+      // SAVE TICKET TO FRONTEND DATA
+      // =======================================================
+
+      DATA.tickets.push({
+        id: ticketId,
+        studentName: SESSION.name,
+        dept: dept,
+        query: query,
+        status: 'open',
+        facultyResponse: null,
+        createdAt: Date.now(),
+        entities: entities,
+        intentKey: entry ? entry.id : null,
+        normQuery: normalizeQuery(query)
+      });
+
+
+      const routeStatus =
+        document.getElementById('status-route');
+
+      if (routeStatus) {
+        routeStatus.textContent = ticketId;
+      }
+
+      await sleep(400);
+
+
+      // =======================================================
+      // NOTIFY FACULTY
+      // =======================================================
+
+      setStage('notify', 'emailing faculty…');
+
+      await sleep(500);
+
+
+      const notifyStatus =
+        document.getElementById('status-notify');
+
+      if (notifyStatus) {
+        notifyStatus.textContent = 'sent';
+      }
+
+
+      // =======================================================
+      // CHAT LOG
+      // =======================================================
+
+      DATA.chatLog.push({
+        type: 'ticket',
+        studentName: SESSION.name,
+        message: query,
+        ticketId: ticketId,
+        dept: dept,
+        timestamp: Date.now()
+      });
+
+
+      // =======================================================
+      // ⭐ SAVE TICKET CONVERSATION TO POSTGRESQL
+      // =======================================================
+
+      const ticketResponse =
+        `Support ticket ${ticketId} has been created and assigned to ${DEPTS[dept]}.`;
+
+
+      console.log('🎫 Saving ticket conversation...');
+      console.log('User ID:', SESSION.userId);
+      console.log('Ticket ID:', ticketId);
+
+
+      const databaseSaved =
+        await saveConversationToDatabase(
+          query,
+          ticketResponse
+        );
+
+
+      console.log(
+        databaseSaved
+          ? '✅ Ticket conversation saved'
+          : '⚠️ Ticket conversation was NOT saved'
+      );
+
+
+      // =======================================================
+      // SAVE FRONTEND DATA
+      // =======================================================
+
+      await saveData();
+
+      renderChatView();
+
+
+      toast(
+        '📧 Email Notification Agent → ' +
+        DEPTS[dept] +
+        ' about ' +
+        ticketId
+      );
+    }
+
+  } catch (error) {
+
+    console.error('❌ submitQuery error:', error);
+
+    toast(
+      '❌ Something went wrong while processing your request.'
+    );
+
+  } finally {
+
+    // Always enable send button again
+    document.getElementById('chat-send').disabled = false;
   }
 }
 
