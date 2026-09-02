@@ -267,3 +267,88 @@ tr:last-child td{border-bottom:none;}
 .tok{font-family:'IBM Plex Mono',monospace;font-size:11px;background:var(--surface);border:1px solid var(--line);color:var(--muted);padding:3px 8px;border-radius:6px;}
 .tok.clean{color:var(--sage);border-color:rgba(127,184,143,0.35);}
 .tok.muted{opacity:.4;text-decoration:line-through;}
+
+/* ---------- MOBILE TOPBAR (hidden on desktop) ---------- */
+.mobile-topbar{
+  display:none;align-items:center;gap:12px;
+  padding:12px 14px;background:var(--surface);border-bottom:1px solid var(--line);
+  position:sticky;top:0;z-index:20;
+}
+.mobile-topbar .brand-mark{margin:0;flex:1;font-size:12px;}
+.mobile-topbar .avatar{
+  width:30px;height:30px;border-radius:50%;background:var(--surface2);border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--brass);font-weight:700;flex-shrink:0;
+}
+.menu-toggle{
+  background:var(--surface2);border:1px solid var(--line);color:var(--text);
+  width:38px;height:38px;border-radius:8px;font-size:17px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+}
+.sidebar-overlay{display:none;}
+
+/* ---------- TOUCH & ACCESSIBILITY BASELINE ---------- */
+button, input, textarea, select{font-size:14px;}
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible{
+  outline:2px solid var(--brass);outline-offset:2px;
+}
+@media (prefers-reduced-motion: reduce){
+  *, *::before, *::after{animation-duration:0.001ms !important;transition-duration:0.001ms !important;}
+}
+
+/* Tables scroll horizontally instead of overflowing the viewport */
+@media (max-width:760px){
+  .card{overflow-x:auto;}
+  table{min-width:520px;}
+}
+
+/* ---------- RESPONSIVE: TABLET / MOBILE ---------- */
+@media (max-width:900px){
+  .login-left{padding:34px 26px;}
+  .login-right{padding:34px 26px;}
+  .login-left h1{font-size:28px;}
+}
+
+@media (max-width:780px){
+  /* App shell becomes single column; sidebar turns into an off-canvas drawer */
+  #app-screen{grid-template-columns:1fr;grid-template-rows:auto 1fr;}
+  #app-screen.show{display:grid;}
+  .mobile-topbar{display:flex;}
+
+  .sidebar{
+    position:fixed;top:0;left:0;bottom:0;width:250px;height:100vh;height:100dvh;
+    z-index:40;transform:translateX(-100%);transition:transform .22s ease;
+    padding-top:16px;
+  }
+  #app-screen.sidebar-open .sidebar{transform:translateX(0);box-shadow:8px 0 30px rgba(0,0,0,0.4);}
+  .sidebar .brand-mark{display:none;} /* shown instead in the mobile topbar */
+
+  .sidebar-overlay{
+    display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:30;
+  }
+  #app-screen.sidebar-open .sidebar-overlay{display:block;}
+
+  .main{
+    height:auto;min-height:calc(100vh - 58px);min-height:calc(100dvh - 58px);
+    padding:18px 16px 40px;overflow-y:visible;
+  }
+
+  .nav-item{padding:12px;font-size:14px;}
+
+  .chat-wrap{height:calc(100dvh - 300px);min-height:300px;}
+  .bubble{max-width:86%;}
+
+  .page-head h2{font-size:19px;}
+
+  /* Inputs at 16px prevent iOS Safari from auto-zooming on focus */
+  input[type=text], textarea, select{font-size:16px;}
+}
+
+@media (max-width:480px){
+  .login-left, .login-right{padding:24px 18px;}
+  .login-left h1{font-size:23px;}
+  .login-left p{max-width:none;}
+  .pipeline-chip{font-size:10px;}
+  .card{padding:15px 16px;}
+  .stat-card .num{font-size:24px;}
+  .bar-row .name{width:88px;font-size:11px;}
+}

@@ -391,9 +391,18 @@ async function handleSignup(){
 
 document.getElementById('logout-btn').addEventListener('click', ()=>{
   document.getElementById('app-screen').classList.remove('show');
+  document.getElementById('app-screen').classList.remove('sidebar-open');
   document.getElementById('login-screen').style.display='flex';
   SESSION = {role:null,name:'',tab:null,userId:null};
   switchMode('signin');
+});
+
+/* ---------- MOBILE SIDEBAR ---------- */
+document.getElementById('menu-toggle').addEventListener('click', ()=>{
+  document.getElementById('app-screen').classList.toggle('sidebar-open');
+});
+document.getElementById('sidebar-overlay').addEventListener('click', ()=>{
+  document.getElementById('app-screen').classList.remove('sidebar-open');
 });
 
 /* ---------- BOOTSTRAP ---------- */
@@ -413,14 +422,20 @@ const NAV = {
 };
 
 function renderShell(){
-  document.getElementById('avatar-letter').textContent = SESSION.name[0].toUpperCase();
+  const initial = SESSION.name[0].toUpperCase();
+  document.getElementById('avatar-letter').textContent = initial;
+  document.getElementById('avatar-letter-mobile').textContent = initial;
   document.getElementById('user-label').textContent = SESSION.name + " · " + SESSION.role[0].toUpperCase()+SESSION.role.slice(1);
   const navWrap = document.getElementById('nav-items');
   navWrap.innerHTML = NAV[SESSION.role].map(([key,icon,label])=>
     `<button class="nav-item ${SESSION.tab===key?'active':''}" data-tab="${key}">${icon} ${label}</button>`
   ).join('') + `<button class="nav-item" data-tab="architecture">🏗️ Architecture</button><button class="nav-item" data-tab="cloud">☁️ Cloud Architecture</button><button class="nav-item" data-tab="nlp">🧪 NLP Design</button><button class="nav-item" data-tab="database">🗄️ Database Design</button><button class="nav-item" data-tab="conversation">🗣️ Conversation Design</button><button class="nav-item" data-tab="prototype">🖥️ Prototype</button><button class="nav-item" data-tab="ethics">🔒 Ethics &amp; Trust</button>`;
   navWrap.querySelectorAll('.nav-item').forEach(b=>{
-    b.addEventListener('click', ()=>{ SESSION.tab = b.dataset.tab; renderShell(); });
+    b.addEventListener('click', ()=>{
+      SESSION.tab = b.dataset.tab;
+      document.getElementById('app-screen').classList.remove('sidebar-open');
+      renderShell();
+    });
   });
   renderMain();
 }
