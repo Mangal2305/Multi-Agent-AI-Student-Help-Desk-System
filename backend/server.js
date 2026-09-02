@@ -129,7 +129,11 @@ app.post('/api/conversations', async (req, res) => {
     user_query,
     ai_response,
     channel,
-    sentiment
+    sentiment,
+    response_type,
+    confidence,
+    ticket_id,
+    dept
   } = req.body;
 
   // Validate required fields
@@ -161,9 +165,13 @@ app.post('/api/conversations', async (req, res) => {
         user_query,
         ai_response,
         channel,
-        sentiment
+        sentiment,
+        response_type,
+        confidence,
+        ticket_id,
+        dept
       )
-      VALUES ($1, $2, $3, $4, $5)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING
         conversation_id,
         user_id,
@@ -171,6 +179,10 @@ app.post('/api/conversations', async (req, res) => {
         ai_response,
         channel,
         sentiment,
+        response_type,
+        confidence,
+        ticket_id,
+        dept,
         created_at
       `,
       [
@@ -178,7 +190,11 @@ app.post('/api/conversations', async (req, res) => {
         user_query,
         ai_response,
         channel || 'web',
-        sentiment || null
+        sentiment || null,
+        response_type || 'answer',
+        confidence != null ? confidence : null,
+        ticket_id || null,
+        dept || null
       ]
     );
 
@@ -199,20 +215,54 @@ app.post('/api/conversations', async (req, res) => {
     });
   }
 });
+
+// List conversations — a student's own chat history, or all (for faculty/admin views)
+app.get('/api/conversations', async (req, res) => {
+  const { user_id } = req.query;
+  try {
+    const result = user_id
+      ? await pool.query(
+          `SELECT c.*, u.full_name AS student_name
+           FROM ai_conversations c LEFT JOIN users u ON u.user_id = c.user_id
+           WHERE c.user_id = $1 ORDER BY c.created_at ASC`,
+          [user_id]
+        )
+      : await pool.query(
+          `SELECT c.*, u.full_name AS student_name
+           FROM ai_conversations c LEFT JOIN users u ON u.user_id = c.user_id
+           ORDER BY c.created_at ASC`
+        );
+    res.json({ conversations: result.rows });
+  } catch (err) {
+    console.error('Conversation list error:', err);
+    res.status(500).json({ error: 'Could not fetch conversations' });
+  }
+});
 // ---------------------------------------------------------
 // Support Tickets: create + list + resolve
 // ---------------------------------------------------------
 app.post('/api/tickets', async (req, res) => {
-  const { user_id, conversation_id, subject, description, priority } = req.body;
+  const { user_id, conversation_id, subject, description, priority, dept, entities, intent_key, norm_query } = req.body;
   if (!subject) {
     return res.status(400).json({ error: 'subject is required' });
   }
   try {
     const result = await pool.query(
-      `INSERT INTO support_tickets (user_id, conversation_id, subject, description, priority)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING ticket_id, status, created_at`,
-      [user_id || null, conversation_id || null, subject, description || null, priority || 'medium']
+      `INSERT INTO support_tickets
+        (user_id, conversation_id, subject, description, priority, dept, entities_json, intent_key, norm_query)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        user_id || null,
+        conversation_id || null,
+        subject,
+        description || null,
+        priority || 'medium',
+        dept || null,
+        entities ? JSON.stringify(entities) : null,
+        intent_key || null,
+        norm_query || null
+      ]
     );
     res.status(201).json({ ticket: result.rows[0] });
   } catch (err) {
@@ -222,16 +272,19 @@ app.post('/api/tickets', async (req, res) => {
 });
 
 app.get('/api/tickets', async (req, res) => {
-  const { user_id, status } = req.query;
+  const { user_id, status, dept } = req.query;
   const conditions = [];
   const values = [];
-  if (user_id) { values.push(user_id); conditions.push(`user_id = $${values.length}`); }
-  if (status) { values.push(status); conditions.push(`status = $${values.length}`); }
+  if (user_id) { values.push(user_id); conditions.push(`t.user_id = $${values.length}`); }
+  if (status)  { values.push(status);  conditions.push(`t.status = $${values.length}`); }
+  if (dept)    { values.push(dept);    conditions.push(`t.dept = $${values.length}`); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   try {
     const result = await pool.query(
-      `SELECT * FROM support_tickets ${where} ORDER BY created_at DESC`,
+      `SELECT t.*, u.full_name AS student_name
+       FROM support_tickets t LEFT JOIN users u ON u.user_id = t.user_id
+       ${where} ORDER BY t.created_at DESC`,
       values
     );
     res.json({ tickets: result.rows });
@@ -243,16 +296,18 @@ app.get('/api/tickets', async (req, res) => {
 
 app.patch('/api/tickets/:id', async (req, res) => {
   const { id } = req.params;
-  const { status, assigned_to } = req.body;
+  const { status, assigned_to, faculty_response, added_to_kb } = req.body;
   try {
     const result = await pool.query(
       `UPDATE support_tickets
        SET status = COALESCE($1, status),
            assigned_to = COALESCE($2, assigned_to),
+           faculty_response = COALESCE($3, faculty_response),
+           added_to_kb = COALESCE($4, added_to_kb),
            resolved_at = CASE WHEN $1 = 'resolved' THEN now() ELSE resolved_at END
-       WHERE ticket_id = $3
+       WHERE ticket_id = $5
        RETURNING *`,
-      [status || null, assigned_to || null, id]
+      [status || null, assigned_to || null, faculty_response || null, added_to_kb != null ? added_to_kb : null, id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Ticket not found' });
     res.json({ ticket: result.rows[0] });

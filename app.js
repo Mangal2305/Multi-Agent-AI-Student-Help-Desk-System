@@ -1,7 +1,7 @@
 /* ============================================================
    DATA MODEL
 ============================================================ */
-const API_BASE = 'http://sahayak.jo3.org:3000'; // <-- set this to your backend's address, or '' if using the nginx /api proxy
+const API_BASE = ''; // same-origin: nginx proxies /api/* to the Node backend on :3000
 
 const DEPTS = {
   "Admissions":"Prof. Rina Shah",
@@ -116,6 +116,55 @@ async function saveData(){
   catch(e){ console.error("storage save failed", e); }
 }
 
+/* ---------- REAL DATABASE SYNC (tickets + chat history) ---------- */
+// Pulls this account's real tickets and chat history from Postgres and
+// merges them into the local DATA object, so refreshing the page or
+// logging in from another device shows the same data, not just what's
+// cached in this browser's localStorage.
+async function syncFromDatabase(){
+  try{
+    const [ticketsRes, convRes] = await Promise.all([
+      fetch(`${API_BASE}/api/tickets`).then(r=>r.json()),
+      fetch(`${API_BASE}/api/conversations${SESSION.role==='student' ? '?user_id='+SESSION.userId : ''}`).then(r=>r.json())
+    ]);
+
+    const dbTickets = (ticketsRes.tickets || []).map(t=>({
+      id: 'TCK-' + t.ticket_id,
+      dbId: t.ticket_id,
+      studentName: t.student_name,
+      dept: t.dept,
+      query: t.subject,
+      status: t.status,
+      facultyResponse: t.faculty_response,
+      createdAt: new Date(t.created_at).getTime(),
+      resolvedAt: t.resolved_at ? new Date(t.resolved_at).getTime() : null,
+      entities: t.entities_json || [],
+      intentKey: t.intent_key,
+      normQuery: t.norm_query,
+      addedToKB: t.added_to_kb
+    }));
+
+    const dbChatLog = (convRes.conversations || []).map(c=>({
+      type: c.response_type || 'answer',
+      studentName: c.student_name,
+      message: c.user_query,
+      response: c.ai_response,
+      confidence: c.confidence != null ? Number(c.confidence) : null,
+      ticketId: c.ticket_id ? 'TCK-' + c.ticket_id : null,
+      dept: c.dept,
+      timestamp: new Date(c.created_at).getTime()
+    }));
+
+    // DB is the source of truth once reachable; local cache is only a fallback.
+    DATA.tickets = dbTickets;
+    DATA.chatLog = dbChatLog;
+    await saveData();
+  }catch(e){
+    console.error('Could not sync tickets/conversations from the database — showing local cache instead', e);
+    toast('⚠️ Could not reach the server — showing locally cached data.');
+  }
+}
+
 /* ============================================================
    NLP SIMULATION (Intent + Entity + Confidence)
 ============================================================ */
@@ -200,10 +249,11 @@ let DATA_READY = false;
 function hashPw(pw){ return btoa(unescape(encodeURIComponent(pw))); } // demo-only obfuscation, not real security
 function isValidEmail(e){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e); }
 
-function enterApp(){
+async function enterApp(){
   SESSION.tab = SESSION.role === 'student' ? 'chat' : SESSION.role === 'faculty' ? 'inbox' : 'overview';
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app-screen').classList.add('show');
+  await syncFromDatabase();
   renderShell();
 }
 
@@ -498,7 +548,7 @@ function pipelineHTML(activeStage){
     return `<div class="${cls}" id="node-${s.k}"><div class="circle">${s.ic}</div><div class="lbl">${s.l}</div><div class="status" id="status-${s.k}"></div></div>${line}`;
   }).join('');
 }
-async function saveConversationToDatabase(userQuery, aiResponse, sentiment = null) {
+async function saveConversationToDatabase(userQuery, aiResponse, sentiment = null, extra = {}) {
   try {
     console.log('📤 Saving conversation to PostgreSQL...');
     console.log('User ID:', SESSION.userId);
@@ -515,16 +565,20 @@ async function saveConversationToDatabase(userQuery, aiResponse, sentiment = nul
     const response = await fetch(`${API_BASE}/api/conversations`, {
       method: 'POST',
       headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-    user_id: SESSION.userId,
-    user_query: userQuery,
-    ai_response: aiResponse,
-    channel: 'web',
-    sentiment: sentiment
-    })
-  });
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        user_id: SESSION.userId,
+        user_query: userQuery,
+        ai_response: aiResponse,
+        channel: 'web',
+        sentiment: sentiment,
+        response_type: extra.response_type || 'answer',
+        confidence: extra.confidence != null ? extra.confidence : null,
+        ticket_id: extra.ticket_id || null,
+        dept: extra.dept || null
+      })
+    });
 
     const data = await response.json();
 
@@ -596,6 +650,7 @@ async function submitQuery() {
     }
 
 
+
     // =========================================================
     // INTENT CLASSIFICATION
     // =========================================================
@@ -611,6 +666,7 @@ async function submitQuery() {
     } = matchIntent(query);
 
     setStage('intent', 'done');
+
 
 
     // =========================================================
@@ -635,6 +691,7 @@ async function submitQuery() {
     await sleep(250);
 
 
+
     // =========================================================
     // KNOWLEDGE RETRIEVAL
     // =========================================================
@@ -656,6 +713,7 @@ async function submitQuery() {
     await sleep(250);
 
 
+
     // =========================================================
     // DECISION / CONFIDENCE
     // =========================================================
@@ -675,11 +733,13 @@ async function submitQuery() {
     await sleep(350);
 
 
+
     // =========================================================
     // DETERMINE WHETHER AI CAN ANSWER DIRECTLY
     // =========================================================
 
     const confident = confidence >= 0.55 && entry;
+
 
 
     // =========================================================
@@ -694,8 +754,10 @@ async function submitQuery() {
       console.log('Answer:', entry.answer);
 
 
+
       // Pipeline complete
       strip.innerHTML = pipelineHTML('done_direct');
+
 
 
       // Mark all stages done
@@ -706,6 +768,7 @@ async function submitQuery() {
             n.classList.add('done');
           }
         });
+
 
 
       // =======================================================
@@ -722,6 +785,7 @@ async function submitQuery() {
       });
 
 
+
       // =======================================================
       // ⭐ SAVE TO POSTGRESQL
       // =======================================================
@@ -729,8 +793,11 @@ async function submitQuery() {
       const databaseSaved =
         await saveConversationToDatabase(
           query,
-          entry.answer
+          entry.answer,
+          null,
+          { response_type: 'answer', confidence: confidence, dept: entry.dept }
         );
+
 
 
       console.log(
@@ -740,10 +807,12 @@ async function submitQuery() {
       );
 
 
+
       // Save existing frontend data
       await saveData();
 
       renderChatView();
+
 
 
       toast(
@@ -753,6 +822,7 @@ async function submitQuery() {
       );
 
 
+
     } else {
 
       // =======================================================
@@ -760,6 +830,7 @@ async function submitQuery() {
       // =======================================================
 
       console.log('🟡 Low confidence → support ticket path');
+
 
 
       // =======================================================
@@ -772,6 +843,7 @@ async function submitQuery() {
           query,
           entry
         );
+
 
 
       if (existing) {
@@ -791,6 +863,7 @@ async function submitQuery() {
         await sleep(350);
 
 
+
         DATA.chatLog.push({
           type: 'duplicate',
           studentName: SESSION.name,
@@ -801,9 +874,19 @@ async function submitQuery() {
         });
 
 
+
+        // Log this duplicate check to Postgres too, so it's not lost on refresh
+        await saveConversationToDatabase(
+          query,
+          `This matches your existing ticket ${existing.id} — no new ticket was created.`,
+          null,
+          { response_type: 'duplicate', dept: existing.dept, ticket_id: existing.dbId || null }
+        );
+
         await saveData();
 
         renderChatView();
+
 
 
         toast(
@@ -816,6 +899,7 @@ async function submitQuery() {
       }
 
 
+
       // =======================================================
       // CREATE NEW TICKET
       // =======================================================
@@ -825,14 +909,48 @@ async function submitQuery() {
       await sleep(500);
 
 
+
       const dept =
         entry
           ? entry.dept
           : guessDept(query);
 
 
-      const ticketId = genTicketId();
 
+      // =======================================================
+      // ⭐ SAVE TICKET TO POSTGRESQL (support_tickets)
+      // =======================================================
+
+      let ticketId = genTicketId(); // fallback id if the server call fails
+      let dbTicketId = null;
+
+      try {
+        const ticketRes = await fetch(`${API_BASE}/api/tickets`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: SESSION.userId,
+            subject: query,
+            priority: 'medium',
+            dept: dept,
+            entities: entities,
+            intent_key: entry ? entry.id : null,
+            norm_query: normalizeQuery(query)
+          })
+        });
+        const ticketData = await ticketRes.json();
+        if (ticketRes.ok && ticketData.ticket) {
+          dbTicketId = ticketData.ticket.ticket_id;
+          ticketId = 'TCK-' + dbTicketId;
+          console.log('✅ Ticket saved to PostgreSQL:', ticketData.ticket);
+        } else {
+          console.error('❌ Ticket save failed:', ticketData);
+          toast('⚠️ Ticket could not be saved to the database — it will only exist locally.');
+        }
+      } catch (e) {
+        console.error('❌ Error calling /api/tickets:', e);
+        toast('⚠️ Database connection error — ticket saved locally only.');
+      }
 
       // =======================================================
       // SAVE TICKET TO FRONTEND DATA
@@ -840,6 +958,7 @@ async function submitQuery() {
 
       DATA.tickets.push({
         id: ticketId,
+        dbId: dbTicketId,
         studentName: SESSION.name,
         dept: dept,
         query: query,
@@ -852,6 +971,7 @@ async function submitQuery() {
       });
 
 
+
       const routeStatus =
         document.getElementById('status-route');
 
@@ -860,6 +980,7 @@ async function submitQuery() {
       }
 
       await sleep(400);
+
 
 
       // =======================================================
@@ -871,12 +992,14 @@ async function submitQuery() {
       await sleep(500);
 
 
+
       const notifyStatus =
         document.getElementById('status-notify');
 
       if (notifyStatus) {
         notifyStatus.textContent = 'sent';
       }
+
 
 
       // =======================================================
@@ -893,6 +1016,7 @@ async function submitQuery() {
       });
 
 
+
       // =======================================================
       // ⭐ SAVE TICKET CONVERSATION TO POSTGRESQL
       // =======================================================
@@ -901,16 +1025,21 @@ async function submitQuery() {
         `Support ticket ${ticketId} has been created and assigned to ${DEPTS[dept]}.`;
 
 
+
       console.log('🎫 Saving ticket conversation...');
       console.log('User ID:', SESSION.userId);
       console.log('Ticket ID:', ticketId);
 
 
+
       const databaseSaved =
         await saveConversationToDatabase(
           query,
-          ticketResponse
+          ticketResponse,
+          null,
+          { response_type: 'ticket', dept: dept, ticket_id: dbTicketId }
         );
+
 
 
       console.log(
@@ -920,6 +1049,7 @@ async function submitQuery() {
       );
 
 
+
       // =======================================================
       // SAVE FRONTEND DATA
       // =======================================================
@@ -927,6 +1057,7 @@ async function submitQuery() {
       await saveData();
 
       renderChatView();
+
 
 
       toast(
@@ -1100,6 +1231,7 @@ function renderS3Bucket(){
 }
 
 
+
 /* ============================================================
    FACULTY: INBOX / RESOLVED
 ============================================================ */
@@ -1131,6 +1263,25 @@ function renderFacultyInbox(){
     const text = document.getElementById('reply-'+id).value.trim();
     if(!text) return;
     const t = DATA.tickets.find(x=>x.id===id);
+
+    // ⭐ Persist the resolution to Postgres so it survives a refresh / another device
+    if(t.dbId){
+      try{
+        const res = await fetch(`${API_BASE}/api/tickets/${t.dbId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'resolved', assigned_to: SESSION.name, faculty_response: text })
+        });
+        if(!res.ok){
+          const err = await res.json().catch(()=>({}));
+          toast('⚠️ Could not save this response to the database: ' + (err.error || 'unknown error'));
+        }
+      }catch(e){
+        console.error(e);
+        toast('⚠️ Database connection error — response saved locally only.');
+      }
+    }
+
     t.facultyResponse = text; t.status='resolved'; t.resolvedAt = Date.now();
     await saveData();
     toast('📧 Student '+t.studentName+' notified · '+id+' resolved');
@@ -1340,6 +1491,7 @@ function runNLPDemo(){
       <small style="color:var(--faint);">${(confidence*100).toFixed(0)}% — ${confident ? 'above the 55% threshold → answered directly' : 'below the 55% threshold → escalated to a ticket'}</small>
     </div>`;
 }
+
 
 
 
